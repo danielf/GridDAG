@@ -1,5 +1,61 @@
 #include <bits/stdc++.h>
 using namespace std;
+
+// Union find implementation
+class UF {
+	// rank[i] is an upper bound on the tree rooted at i
+  vector<int> rank;
+	// parent[i] is the parent of i
+  vector<int> parent;
+	// largest[i] is the largest element of the set with i as its root
+  vector<int> largest;
+	// Returns the root of the tree x belongs to
+  int getRoot(int x) {
+    int root = x;
+    while (parent[root] != root) root = parent[root];
+    // compress the path
+    while (parent[x] != x) {
+      int y = parent[x];
+      parent[x] = root;
+      x = y;
+    }
+    return root;
+  }
+  public:
+
+	// Initializes
+  UF(int n) {
+    parent.resize(n);
+    rank.resize(n);
+    largest.resize(n);
+    for (int i = 0; i < n; i++) {
+      parent[i] = i;
+      largest[i] = i;
+      rank[i] = i;
+    }
+  }
+
+	// Union
+  void makeUnion(int a, int b) {
+    a = getRoot(a);
+    b = getRoot(b);
+    if (a == b) return;
+    largest[a] = largest[b] = max(largest[a], largest[b]);
+    // Union by rank
+    if (rank[a] < rank[b]) parent[a] = b;
+    else parent[b] = a;
+    if (rank[a] == rank[b]) rank[a]++;
+  }
+
+	// find/largest
+  int getLargest(int x) {
+    return largest[getRoot(x)];
+  }
+
+	// make "all_trees" a friend class so that it can directly access the "parent" vector. This leads to a small gain in performance.
+	friend class all_trees;
+};
+
 class all_trees {
   // input /////////////////////////////////////////////////////////////////////////////
   // l[i][j] is the length of the diagonal arc with head at (i, j).
@@ -17,6 +73,7 @@ class all_trees {
   //   valD[i][j] = S_a^k[i-1][j-1] + l_a^k[i][j] - S_a^k[i][j-1]
   //   valV[i][j] = S_a^k[i-1][j] - S_a^k[i][j-1]
   vector<vector<int>> valD, valV;
+  vector<UF> unionFinds;
   // Border points. Maintain it to avoid memory allocations.
   vector<int> B;
   
@@ -26,10 +83,18 @@ class all_trees {
   void setDiagonal(int i, int j, int a) {
     timeD[i][j] = min(timeD[i][j], a);
   }
-  void setHorizontal(int i, int j, int a) {
+  void setHorizontal(int i, int j, int a, bool makeUnion = true) {
     timeD[i][j] = min(timeD[i][j], a);
     timeH[i][j] = min(timeH[i][j], a);
+    if (makeUnion) unionFinds[i].makeUnion(j, j + 1);
   }
+	// Update "P" (ie, timeD and timeH) based on valV and valD
+	void updateP(int i, int j, int a) {
+		int op = max({0, valV[i][j], valD[i][j]});
+		if (op == 0) setHorizontal(i, j, a);
+		else if (op == valD[i][j]) setDiagonal(i, j, a);
+		else setVertical(i, j, a);
+	}
   // return parent family:
   //   0 - horizontal
   //   1 - diagonal
@@ -44,14 +109,11 @@ class all_trees {
   private:
   // find the next border value
   int findFirstNotHorizontal(int i, int j, int a) {
-    for (; j <= M; j++) {
-      if (getParentFamilyAt(i, j, a) != 0) return j;
-    }
-    return M + 1; // Didn't find
+    return unionFinds[i].getLargest(j);
   }
 
   // main part, actually use the theorems from the paper :)
-  void update(int a) {
+  void advance(int a) {
     B[a] = 0;
     B[a + 1] = findFirstNotHorizontal(a + 1, 1, a + 1);
     for (int i = a + 2; i <= N; i++) {
@@ -59,16 +121,12 @@ class all_trees {
       else B[i] = findFirstNotHorizontal(i, B[i - 1] + 1, a + 1);
       if (B[i] == M + 1) break; // no need to continue
     }
-    // Now that we have all B, update the internal data structures
+    // Now that we have all B, advance the internal data structures
     for (int i = a + 1; i <= N && B[i] != M + 1; i++) {
       valV[i][B[i]]--;
       if (B[i - 1] <= B[i] - 1) valD[i][B[i]]--;
       if (i < N && B[i + 1] > B[i]) valV[i + 1][B[i]]--;
-      // maybe update. Find options with respect to opH.
-      int op = max({0, valV[i][B[i]], valD[i][B[i]]});
-      if (op == 0) setHorizontal(i, B[i], a + 1);
-      else if (op == valD[i][B[i]]) setDiagonal(i, B[i], a + 1);
-      else setVertical(i, B[i], a + 1);
+			updateP(i, B[i], a + 1);
     }
   }
 
@@ -86,18 +144,24 @@ class all_trees {
       setVertical(i, 0, 0);
     }
     // main part
-    for (int i = 1; i <= N; i++) for (int j = 1; j <= M; j++) {
-      // compute the three options
-      int opH = S[i][j - 1];
-      int opD = S[i - 1][j - 1] + l[i][j];
-      int opV = S[i - 1][j];
-      int op = max({opH, opD, opV});
-      S[i][j] = op;
-      if (opH == op) setHorizontal(i, j, 0);
-      else if (opD == op) setDiagonal(i, j, 0);
-      else setVertical(i, j, 0);
-      valD[i][j] = opD - opH;
-      valV[i][j] = opV - opH;
+    for (int i = 1; i <= N; i++) {
+      int lastNotHorizontal = 0;
+      for (int j = 1; j <= M; j++) {
+        // compute the three options
+        int opH = S[i][j - 1];
+        int opD = S[i - 1][j - 1] + l[i][j];
+        int opV = S[i - 1][j];
+        S[i][j] = max({opH, opD, opV});
+        valD[i][j] = opD - opH;
+        valV[i][j] = opV - opH;
+				updateP(i, j, 0);
+        if (getParentFamilyAt(i, j, 0) != 0) { // not horizontal
+					// direct the parent node of the UF structure directly to [i, j], making shallow trees.
+          for (int k = lastNotHorizontal + 1; k < j; k++) unionFinds[i].parent[k] = j;
+          lastNotHorizontal = j;
+        }
+      }
+      for (int k = lastNotHorizontal + 1; k <= M; k++) unionFinds[i].parent[k] = M + 1;
     }
   }
   public:
@@ -114,11 +178,13 @@ class all_trees {
     timeD.assign(N + 1, vector<int>(M + 1, N + 5));
     timeH = timeD;
     B.assign(N + 1, 0);
+    for (int i = 0; i <= N; i++)
+      unionFinds.emplace_back(M + 2);
     // Compute T0
     computeT0();
     // Now compute all other values
     for (int a = 0; a < N; a++) {
-      for (int times = 0; times < L; times++) update(a);
+      for (int times = 0; times < L; times++) advance(a);
     }
   }
 };
@@ -156,9 +222,13 @@ void check(int a, const vector<vector<int>> &l, const all_trees& t) {
 }
 
 // Main function to check. Generate a random NxN with maximum size L.
-int main() {
-  int N = 100, M = 500000;
-  int L = 50;
+int main(int argc, char * argv[]) {
+	if (argc != 4) {
+		printf("Usage: %s N M L\n", argv[0]);
+		return 1;
+	}
+  int N = atoi(argv[1]), M = atoi(argv[2]);
+  int L = atoi(argv[3]);
   // initialize l with - infinity
   vector<vector<int>> l(N + 1, vector<int>(M + 1, -N*L*L));
   mt19937 engine;
